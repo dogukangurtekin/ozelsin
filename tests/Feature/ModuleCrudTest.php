@@ -46,7 +46,7 @@ class ModuleCrudTest extends TestCase
         $this->actingAs($admin);
 
         $routes = [
-            '/students', '/teachers', '/classes', '/courses', '/grades', '/attendance', '/announcements', '/users', '/reports',
+            '/students', '/classes', '/courses', '/ogrenci-verileri', '/odevler',
         ];
 
         foreach ($routes as $route) {
@@ -71,14 +71,14 @@ class ModuleCrudTest extends TestCase
         $this->assertDatabaseHas('students', ['student_no' => 'S2001']);
     }
 
-    public function test_reports_csv_download_works(): void
+    public function test_students_bulk_template_download_works(): void
     {
         $admin = $this->adminUser();
         $this->seedAcademicBase();
 
         $this->actingAs($admin)
-            ->get('/reports/students.csv')
+            ->get('/students/bulk/template')
             ->assertStatus(200)
-            ->assertHeader('content-type', 'text/csv; charset=UTF-8');
+            ->assertHeader('content-type', 'application/vnd.ms-excel; charset=UTF-8');
     }
 }
