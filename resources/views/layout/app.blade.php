@@ -149,6 +149,10 @@
 <script>
 (() => {
     const feedUrl = @json(route('notifications.feed'));
+    const pushSubscribeUrl = @json(route('notifications.push.subscribe'));
+    const pushUnsubscribeUrl = @json(route('notifications.push.unsubscribe'));
+    const vapidPublicKey = @json((string) config('services.webpush.public_key', ''));
+    const csrfToken = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '';
     const storageKey = `notif:last:id:${@json((int) auth()->id())}`;
     const canUseStorage = typeof window.localStorage !== 'undefined';
     let lastId = canUseStorage ? Number(localStorage.getItem(storageKey) || 0) : 0;
@@ -190,29 +194,73 @@
         setTimeout(() => item.remove(), 6500);
     }
 
-    async function showDeviceNotification(title, content) {
-        if (!('Notification' in window)) return;
-        if (Notification.permission === 'default') {
-            try { await Notification.requestPermission(); } catch (_) {}
+    function urlBase64ToUint8Array(base64String) {
+        const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+        const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+        const rawData = atob(base64);
+        const outputArray = new Uint8Array(rawData.length);
+        for (let i = 0; i < rawData.length; ++i) {
+            outputArray[i] = rawData.charCodeAt(i);
         }
-        if (Notification.permission !== 'granted') return;
+        return outputArray;
+    }
+
+    async function sendSubscriptionToServer(sub) {
+        await fetch(pushSubscribeUrl, {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: {
+                'X-CSRF-TOKEN': csrfToken,
+                'Accept': 'application/json',
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(sub),
+        });
+    }
+
+    async function removeSubscriptionFromServer(endpoint) {
+        await fetch(pushUnsubscribeUrl, {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: {
+                'X-CSRF-TOKEN': csrfToken,
+                'Accept': 'application/json',
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ endpoint }),
+        });
+    }
+
+    async function registerWebPush() {
+        if (!vapidPublicKey || !('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) {
+            return;
+        }
 
         try {
-            if ('serviceWorker' in navigator) {
-                const reg = await navigator.serviceWorker.ready;
-                if (reg?.showNotification) {
-                    await reg.showNotification(title, {
-                        body: content,
-                        icon: '{{ asset('logo192.png') }}',
-                        badge: '{{ asset('logo192.png') }}',
-                        tag: `app-notif-${Date.now()}`,
-                    });
-                    return;
-                }
-            }
-        } catch (_) {}
+            const reg = await navigator.serviceWorker.ready;
+            let sub = await reg.pushManager.getSubscription();
 
-        try { new Notification(title, { body: content }); } catch (_) {}
+            if (Notification.permission === 'denied') {
+                if (sub?.endpoint) await removeSubscriptionFromServer(sub.endpoint);
+                if (sub) await sub.unsubscribe();
+                return;
+            }
+
+            if (Notification.permission === 'default') {
+                const permission = await Notification.requestPermission();
+                if (permission !== 'granted') return;
+            }
+
+            if (!sub) {
+                sub = await reg.pushManager.subscribe({
+                    userVisibleOnly: true,
+                    applicationServerKey: urlBase64ToUint8Array(vapidPublicKey),
+                });
+            }
+
+            await sendSubscriptionToServer(sub.toJSON());
+        } catch (_) {
+        }
     }
 
     async function bootstrapLatestId() {
@@ -252,7 +300,6 @@
                 const title = String(item.title || 'Yeni Bildirim');
                 const content = String(item.content || '');
                 showToast(title, content);
-                showDeviceNotification(title, content);
             }
             saveLastId();
         } catch (_) {
@@ -262,6 +309,7 @@
     }
 
     (async () => {
+        await registerWebPush();
         await bootstrapLatestId();
         bootstrapped = true;
         setInterval(pollFeed, 7000);

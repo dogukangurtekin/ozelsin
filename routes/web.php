@@ -137,5 +137,7 @@ Route::middleware('auth')->group(function () {
         Route::get('/ogrenci/gelisim-raporum', [StudentPortalController::class, 'progressReport'])->name('student.portal.progress-report');
     });
 
+    Route::post('/bildirimler/push/abone-ol', [NotificationController::class, 'pushSubscribe'])->name('notifications.push.subscribe');
+    Route::post('/bildirimler/push/abone-cik', [NotificationController::class, 'pushUnsubscribe'])->name('notifications.push.unsubscribe');
     Route::get('/bildirimler/akis', [NotificationController::class, 'feed'])->name('notifications.feed');
 });

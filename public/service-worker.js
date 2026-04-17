@@ -1,4 +1,4 @@
-const SW_VERSION = "v1.2.1";
+const SW_VERSION = "v1.3.0";
 const RUNTIME_CACHE = `runtime-${SW_VERSION}`;
 const SHELL_CACHE = `shell-${SW_VERSION}`;
 const OFFLINE_URL = "offline.html";
@@ -85,4 +85,47 @@ self.addEventListener("fetch", (event) => {
       })
     );
   }
+});
+
+self.addEventListener("push", (event) => {
+  if (!event.data) return;
+
+  let payload = {};
+  try {
+    payload = event.data.json();
+  } catch (_e) {
+    payload = { body: event.data.text() };
+  }
+
+  const title = payload.title || "Yeni Bildirim";
+  const options = {
+    body: payload.body || "",
+    icon: "/logo192.png",
+    badge: "/logo192.png",
+    data: {
+      url: payload.url || "/bildirimler",
+      id: payload.id || null,
+    },
+  };
+
+  event.waitUntil(self.registration.showNotification(title, options));
+});
+
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const targetUrl = (event.notification?.data && event.notification.data.url) || "/bildirimler";
+
+  event.waitUntil(
+    clients.matchAll({ type: "window", includeUncontrolled: true }).then((windowClients) => {
+      for (const client of windowClients) {
+        if ("focus" in client) {
+          client.navigate(targetUrl);
+          return client.focus();
+        }
+      }
+      if (clients.openWindow) {
+        return clients.openWindow(targetUrl);
+      }
+    })
+  );
 });
