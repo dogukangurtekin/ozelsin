@@ -148,51 +148,11 @@
 @if(auth()->check())
 <script>
 (() => {
-    const feedUrl = @json(route('notifications.feed'));
-    const pushSubscribeUrl = @json(route('notifications.push.subscribe'));
-    const pushUnsubscribeUrl = @json(route('notifications.push.unsubscribe'));
-    const vapidPublicKey = @json((string) config('services.webpush.public_key', ''));
+    const publicKeyUrl = @json(route('notifications.public-key'));
+    const subscribeUrl = @json(route('notifications.subscribe'));
+    const unsubscribeUrl = @json(route('notifications.unsubscribe'));
+    const deviceStatusUrl = @json(route('notifications.device-status'));
     const csrfToken = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '';
-    const storageKey = `notif:last:id:${@json((int) auth()->id())}`;
-    const canUseStorage = typeof window.localStorage !== 'undefined';
-    let lastId = canUseStorage ? Number(localStorage.getItem(storageKey) || 0) : 0;
-    let bootstrapped = false;
-    let busy = false;
-
-    function saveLastId() {
-        if (!canUseStorage) return;
-        localStorage.setItem(storageKey, String(lastId));
-    }
-
-    function ensureToastWrap() {
-        let wrap = document.getElementById('system-notification-toast-wrap');
-        if (wrap) return wrap;
-        wrap = document.createElement('div');
-        wrap.id = 'system-notification-toast-wrap';
-        wrap.style.position = 'fixed';
-        wrap.style.right = '16px';
-        wrap.style.bottom = '16px';
-        wrap.style.zIndex = '100000';
-        wrap.style.display = 'grid';
-        wrap.style.gap = '8px';
-        document.body.appendChild(wrap);
-        return wrap;
-    }
-
-    function showToast(title, content) {
-        const wrap = ensureToastWrap();
-        const item = document.createElement('article');
-        item.style.background = '#0f172a';
-        item.style.color = '#fff';
-        item.style.padding = '12px 14px';
-        item.style.borderRadius = '12px';
-        item.style.width = 'min(360px, calc(100vw - 32px))';
-        item.style.boxShadow = '0 16px 30px rgba(2,6,23,.35)';
-        item.style.border = '1px solid rgba(148,163,184,.35)';
-        item.innerHTML = `<strong style="display:block;font-size:14px;margin-bottom:4px;">${title}</strong><p style="margin:0;font-size:13px;line-height:1.4;">${content}</p>`;
-        wrap.appendChild(item);
-        setTimeout(() => item.remove(), 6500);
-    }
 
     function urlBase64ToUint8Array(base64String) {
         const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
@@ -206,7 +166,7 @@
     }
 
     async function sendSubscriptionToServer(sub) {
-        await fetch(pushSubscribeUrl, {
+        await fetch(subscribeUrl, {
             method: 'POST',
             credentials: 'same-origin',
             headers: {
@@ -219,7 +179,7 @@
     }
 
     async function removeSubscriptionFromServer(endpoint) {
-        await fetch(pushUnsubscribeUrl, {
+        await fetch(unsubscribeUrl, {
             method: 'POST',
             credentials: 'same-origin',
             headers: {
@@ -231,18 +191,42 @@
         });
     }
 
+    async function syncDeviceStatus(endpoint = '') {
+        const platform = navigator.platform || navigator.userAgent || '';
+        const isPwa = (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) || window.navigator.standalone === true;
+        await fetch(deviceStatusUrl, {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: {
+                'X-CSRF-TOKEN': csrfToken,
+                'Accept': 'application/json',
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                endpoint,
+                permission: (window.Notification && Notification.permission) ? Notification.permission : 'default',
+                platform,
+                is_pwa: !!isPwa,
+            }),
+        });
+    }
+
     async function registerWebPush() {
-        if (!vapidPublicKey || !('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) {
+        if (!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) {
             return;
         }
 
         try {
+            const keyRes = await fetch(publicKeyUrl, { credentials: 'same-origin', headers: { 'Accept': 'application/json' } });
+            const keyJson = await keyRes.json().catch(() => ({}));
+            const vapidPublicKey = String(keyJson.public_key || '');
             const reg = await navigator.serviceWorker.ready;
             let sub = await reg.pushManager.getSubscription();
 
             if (Notification.permission === 'denied') {
                 if (sub?.endpoint) await removeSubscriptionFromServer(sub.endpoint);
                 if (sub) await sub.unsubscribe();
+                await syncDeviceStatus(sub?.endpoint || '');
                 return;
             }
 
@@ -251,70 +235,27 @@
                 if (permission !== 'granted') return;
             }
 
-            if (!sub) {
+            if (!sub && vapidPublicKey) {
                 sub = await reg.pushManager.subscribe({
                     userVisibleOnly: true,
                     applicationServerKey: urlBase64ToUint8Array(vapidPublicKey),
                 });
             }
 
-            await sendSubscriptionToServer(sub.toJSON());
-        } catch (_) {
-        }
-    }
-
-    async function bootstrapLatestId() {
-        try {
-            const res = await fetch(`${feedUrl}?latest_id_only=1`, {
-                credentials: 'same-origin',
-                headers: { 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
-            });
-            if (!res.ok) return;
-            const data = await res.json();
-            const latest = Number(data.latest_id || 0);
-            if (latest > lastId) {
-                lastId = latest;
-                saveLastId();
+            if (sub) {
+                await sendSubscriptionToServer(sub.toJSON());
+                await syncDeviceStatus(sub.endpoint || '');
+            } else {
+                await syncDeviceStatus('');
             }
-        } catch (_) {}
-    }
-
-    async function pollFeed() {
-        if (busy || !bootstrapped) return;
-        busy = true;
-        try {
-            const res = await fetch(`${feedUrl}?after_id=${lastId}`, {
-                credentials: 'same-origin',
-                headers: { 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
-            });
-            if (!res.ok) return;
-            const data = await res.json();
-            const items = Array.isArray(data.items) ? data.items : [];
-            if (!items.length) return;
-
-            for (const item of items) {
-                const itemId = Number(item.id || 0);
-                if (itemId > lastId) {
-                    lastId = itemId;
-                }
-                const title = String(item.title || 'Yeni Bildirim');
-                const content = String(item.content || '');
-                showToast(title, content);
-            }
-            saveLastId();
         } catch (_) {
-        } finally {
-            busy = false;
         }
     }
 
     (async () => {
         await registerWebPush();
-        await bootstrapLatestId();
-        bootstrapped = true;
-        setInterval(pollFeed, 7000);
         document.addEventListener('visibilitychange', () => {
-            if (document.visibilityState === 'visible') pollFeed();
+            if (document.visibilityState === 'visible') registerWebPush();
         });
     })();
 })();

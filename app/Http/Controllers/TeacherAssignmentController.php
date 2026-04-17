@@ -5,11 +5,17 @@ namespace App\Http\Controllers;
 use App\Models\CourseHomework;
 use App\Models\GameAssignment;
 use App\Models\SchoolClass;
+use App\Models\Student;
+use App\Services\PushNotificationService;
 use Illuminate\Http\Request;
 use Illuminate\Validation\ValidationException;
 
 class TeacherAssignmentController extends Controller
 {
+    public function __construct(private PushNotificationService $pushService)
+    {
+    }
+
     public function index()
     {
         $courseHomeworks = CourseHomework::with(['course', 'schoolClass'])
@@ -50,7 +56,7 @@ class TeacherAssignmentController extends Controller
 
         if ($targetClassIds === []) {
             throw ValidationException::withMessages([
-                'class_ids' => 'En az bir sınıf seçmelisiniz veya "Tüm sınıflar" seçeneğini açmalısınız.',
+                'class_ids' => 'En az bir sinif secmelisiniz veya "Tum siniflar" secenegini acmalisiniz.',
             ]);
         }
 
@@ -72,7 +78,22 @@ class TeacherAssignmentController extends Controller
             ]);
         }
 
-        return redirect()->route('teacher.assignments.index')->with('ok', 'Ödev başarıyla oluşturuldu.');
+        $studentUserIds = Student::query()
+            ->whereIn('school_class_id', $targetClassIds)
+            ->whereNotNull('user_id')
+            ->pluck('user_id')
+            ->map(fn ($x) => (int) $x)
+            ->all();
+        $this->pushService->sendToUsers(
+            $studentUserIds,
+            'assignment_created',
+            'Yeni Odev Eklendi',
+            (string) $validated['title'],
+            url('/ogrenci/odevlerim'),
+            ['trigger' => 'teacher_assignment']
+        );
+
+        return redirect()->route('teacher.assignments.index')->with('ok', 'Odev basariyla olusturuldu.');
     }
 
     public function showCourseHomework(CourseHomework $homework)
@@ -235,3 +256,4 @@ class TeacherAssignmentController extends Controller
         return redirect()->route('teacher.assignments.index')->with('ok', 'Oyun/uygulama odevi silindi. Ogrenci kayitlari korunur.');
     }
 }
+

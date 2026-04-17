@@ -6,10 +6,16 @@ use App\Http\Controllers\ActivityController;
 use App\Models\Course;
 use App\Models\CourseHomework;
 use App\Models\SchoolClass;
+use App\Models\Student;
+use App\Services\PushNotificationService;
 use Illuminate\Http\Request;
 
 class CourseHomeworkController extends Controller
 {
+    public function __construct(private PushNotificationService $pushService)
+    {
+    }
+
     public function create(Course $course)
     {
         $classes = SchoolClass::orderBy('name')->orderBy('section')->get();
@@ -59,6 +65,21 @@ class CourseHomeworkController extends Controller
                 'created_by' => auth()->id(),
             ]);
         }
+
+        $studentUserIds = Student::query()
+            ->whereIn('school_class_id', $classIds)
+            ->whereNotNull('user_id')
+            ->pluck('user_id')
+            ->map(fn ($x) => (int) $x)
+            ->all();
+        $this->pushService->sendToUsers(
+            $studentUserIds,
+            'assignment_created',
+            'Yeni Odev Eklendi',
+            $validated['title'],
+            url('/ogrenci/odevlerim'),
+            ['course_id' => $course->id]
+        );
 
         return redirect()->route('courses.homeworks.create', $course)->with('ok', count($classIds) . ' sinif icin odev olusturuldu.');
     }

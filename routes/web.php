@@ -54,7 +54,9 @@ Route::middleware('auth')->group(function () {
 
     Route::middleware('role:admin,teacher')->group(function () {
         Route::get('/bildirimler', [NotificationController::class, 'index'])->name('notifications.index');
-        Route::post('/bildirimler/mesajlar', [NotificationController::class, 'storeMessage'])->name('notifications.messages.store');
+        Route::post('/app-notifications/send', [NotificationController::class, 'sendMessage'])->name('notifications.send');
+        Route::post('/app-notifications/{log}/resend', [NotificationController::class, 'resend'])->name('notifications.resend');
+        Route::delete('/app-notifications/{log}', [NotificationController::class, 'destroyLog'])->name('notifications.logs.destroy');
         Route::post('/veli-bildirim/whatsapp/baslat', [ParentWhatsappController::class, 'start'])->name('parent-whatsapp.start');
         Route::post('/veli-bildirim/whatsapp/adim/{taskId}', [ParentWhatsappController::class, 'step'])->name('parent-whatsapp.step');
         Route::get('/veli-bildirim/siniflar', [ParentWhatsappController::class, 'classes'])->name('parent-whatsapp.classes');
@@ -137,7 +139,10 @@ Route::middleware('auth')->group(function () {
         Route::get('/ogrenci/gelisim-raporum', [StudentPortalController::class, 'progressReport'])->name('student.portal.progress-report');
     });
 
-    Route::post('/bildirimler/push/abone-ol', [NotificationController::class, 'pushSubscribe'])->name('notifications.push.subscribe');
-    Route::post('/bildirimler/push/abone-cik', [NotificationController::class, 'pushUnsubscribe'])->name('notifications.push.unsubscribe');
-    Route::get('/bildirimler/akis', [NotificationController::class, 'feed'])->name('notifications.feed');
+    Route::get('/webpush/public-key', [NotificationController::class, 'publicKey'])->name('notifications.public-key');
+    Route::post('/webpush/subscribe', [NotificationController::class, 'subscribe'])->name('notifications.subscribe');
+    Route::post('/webpush/unsubscribe', [NotificationController::class, 'unsubscribe'])->name('notifications.unsubscribe');
+    Route::post('/webpush/device-status', [NotificationController::class, 'syncDeviceStatus'])->name('notifications.device-status');
+    Route::post('/app-notifications/preferences', [NotificationController::class, 'updatePreferences'])->name('notifications.preferences.update');
+    Route::post('/app-notifications/{log}/read', [NotificationController::class, 'markRead'])->name('notifications.read');
 });
