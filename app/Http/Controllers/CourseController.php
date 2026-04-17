@@ -13,6 +13,7 @@ use Illuminate\Http\UploadedFile;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
+use Illuminate\Validation\ValidationException;
 use Symfony\Component\Process\Process;
 
 class CourseController extends Controller
@@ -165,7 +166,13 @@ class CourseController extends Controller
             }
         }
 
-        $path = $this->storeCoverAsWebp($request->file('cover_image_file'));
+        try {
+            $path = $this->storeCoverAsWebp($request->file('cover_image_file'));
+        } catch (\Throwable $e) {
+            throw ValidationException::withMessages([
+                'cover_image_file' => $e->getMessage(),
+            ]);
+        }
         $payload['cover_image'] = ltrim($path, '/');
         $data['lesson_payload'] = json_encode($payload, JSON_UNESCAPED_UNICODE);
         unset($data['cover_image_file']);
@@ -183,27 +190,29 @@ class CourseController extends Controller
         }
 
         $magick = $this->resolveMagickBinary();
-        if ($magick === null) {
-            throw new \RuntimeException('ImageMagick bulunamadi. Kapak gorseli islenemedi.');
+        if ($magick !== null) {
+            $process = new Process([
+                $magick,
+                $file->getRealPath(),
+                '-auto-orient',
+                '-resize', '1600x900^',
+                '-gravity', 'center',
+                '-extent', '1600x900',
+                '-strip',
+                '-quality', '78',
+                '-define', 'webp:method=6',
+                $outputPath,
+            ]);
+            $process->setTimeout(20);
+            $process->run();
         }
 
-        $process = new Process([
-            $magick,
-            $file->getRealPath(),
-            '-auto-orient',
-            '-resize', '1600x900^',
-            '-gravity', 'center',
-            '-extent', '1600x900',
-            '-strip',
-            '-quality', '78',
-            '-define', 'webp:method=6',
-            $outputPath,
-        ]);
-        $process->setTimeout(20);
-        $process->run();
+        if (!is_file($outputPath)) {
+            $this->storeCoverWithGd($file->getRealPath(), $outputPath);
+        }
 
-        if (! $process->isSuccessful() || !is_file($outputPath)) {
-            throw new \RuntimeException('Kapak gorseli webp formata donusturulemedi.');
+        if (!is_file($outputPath)) {
+            throw new \RuntimeException('Kapak gorseli islenemedi. Sunucuda webp donusumu desteklenmiyor olabilir.');
         }
 
         return $relative;
@@ -225,7 +234,8 @@ class CourseController extends Controller
                 }
                 continue;
             }
-            $probe = new Process(['where', $bin]);
+            $locator = PHP_OS_FAMILY === 'Windows' ? 'where' : 'which';
+            $probe = new Process([$locator, $bin]);
             $probe->setTimeout(5);
             $probe->run();
             if ($probe->isSuccessful()) {
@@ -234,5 +244,50 @@ class CourseController extends Controller
         }
 
         return null;
+    }
+
+    private function storeCoverWithGd(string $sourcePath, string $outputPath): void
+    {
+        if (!function_exists('imagecreatefromstring') || !function_exists('imagewebp')) {
+            throw new \RuntimeException('Kapak gorseli islenemedi. GD/webp destegi bulunamadi.');
+        }
+
+        $raw = @file_get_contents($sourcePath);
+        if ($raw === false) {
+            throw new \RuntimeException('Kapak gorseli okunamadi.');
+        }
+        $src = @imagecreatefromstring($raw);
+        if (!is_resource($src) && !($src instanceof \GdImage)) {
+            throw new \RuntimeException('Kapak gorseli islenemedi.');
+        }
+
+        $srcW = imagesx($src);
+        $srcH = imagesy($src);
+        $dstW = 1600;
+        $dstH = 900;
+        $targetRatio = $dstW / $dstH;
+        $srcRatio = $srcW / max($srcH, 1);
+
+        if ($srcRatio > $targetRatio) {
+            $cropH = $srcH;
+            $cropW = (int) round($srcH * $targetRatio);
+            $srcX = (int) floor(($srcW - $cropW) / 2);
+            $srcY = 0;
+        } else {
+            $cropW = $srcW;
+            $cropH = (int) round($srcW / $targetRatio);
+            $srcX = 0;
+            $srcY = (int) floor(($srcH - $cropH) / 2);
+        }
+
+        $dst = imagecreatetruecolor($dstW, $dstH);
+        imagecopyresampled($dst, $src, 0, 0, $srcX, $srcY, $dstW, $dstH, $cropW, $cropH);
+        if (!@imagewebp($dst, $outputPath, 78)) {
+            imagedestroy($dst);
+            imagedestroy($src);
+            throw new \RuntimeException('Kapak gorseli webp olarak kaydedilemedi.');
+        }
+        imagedestroy($dst);
+        imagedestroy($src);
     }
 }
